@@ -16,6 +16,22 @@ import type {
 } from '../types/events';
 import type { ComponentAPI } from '../types/component-api';
 
+function bpsToKbps(bps) {
+  const kbps = bps / 1000;
+  return (
+    kbps.toLocaleString(undefined, {
+      maximumFractionDigits: 0,
+      useGrouping: true,
+    }) + ' kbps'
+  );
+}
+
+declare global {
+  interface Window {
+    __HLSPlayerGlobalSizeFactor: Function;
+  }
+}
+
 class AbrController implements ComponentAPI {
   protected hls: Hls;
   private lastLoadedFragLevel: number = 0;
@@ -264,8 +280,44 @@ class AbrController implements ComponentAPI {
     // rationale is that buffer appending only happens once media is attached. This can happen when config.startFragPrefetch
     // is used. If we used buffering in that case, our BW estimate sample will be very large.
     const processingMs = stats.parsing.end - stats.loading.start;
-    this.bwEstimator.sample(processingMs, stats.loaded);
+
+    const currentLevel = this.hls.levels[frag.level];
+
+    let sizeFactor = 1;
+
+    // add more weight to lower resolution
+    // by increasing its factor
+    // because they all have good
+    // download/parsing speed
+    // on a good connection
+    // and it can't go any lower.
+    // so to even it out.
+    // we are increase the size
+    // of lower factor
+    // so we can get a higher bandwidth
+    switch (currentLevel.height) {
+      case 270:
+        sizeFactor = 7;
+        break;
+      case 360:
+        sizeFactor = 4;
+        break;
+      default:
+        sizeFactor = 1;
+        break;
+    }
+
+    if (typeof self.__HLSPlayerGlobalSizeFactor === 'function') {
+      sizeFactor = self.__HLSPlayerGlobalSizeFactor(
+        currentLevel.height,
+        processingMs,
+        stats.loaded
+      );
+    }
+
+    this.bwEstimator.sample(processingMs, stats.loaded * sizeFactor);
     stats.bwEstimate = this.bwEstimator.getEstimate();
+
     if (frag.bitrateTest) {
       this.bitrateTestDelay = processingMs / 1000;
     } else {
